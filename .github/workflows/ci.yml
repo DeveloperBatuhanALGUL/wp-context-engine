@@ -37,10 +37,8 @@ jobs:
           php-version: '8.1'
           tools: composer, cs2pr
 
-      - name: Install PHPCS + WPCS
-        run: |
-          composer require --dev squizlabs/php_codesniffer wp-coding-standards/wpcs --no-interaction
-          ./vendor/bin/phpcs --config-set installed_paths vendor/wp-coding-standards/wpcs
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
 
       - name: Run PHPCS
         run: ./vendor/bin/phpcs --standard=WordPress --extensions=php --ignore=vendor/ . || true
