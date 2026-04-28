@@ -4,11 +4,17 @@ defined( 'ABSPATH' ) || exit;
 
 class WPCE_ContextQuery {
 
-    const DEFAULT_TOP_K = 5;
+    const DEFAULT_TOP_K  = 5;
+    const MAX_CHUNKS     = 2000;
+    const MAX_INPUT_LEN  = 500;
 
     public static function query( string $input, array $options = [] ): array {
-        $model  = $options['model']  ?? self::active_model();
-        $top_k  = $options['top_k']  ?? self::DEFAULT_TOP_K;
+        if ( mb_strlen( $input ) > self::MAX_INPUT_LEN ) {
+            $input = mb_substr( $input, 0, self::MAX_INPUT_LEN );
+        }
+
+        $model  = $options['model']   ?? self::active_model();
+        $top_k  = min( (int) ( $options['top_k'] ?? self::DEFAULT_TOP_K ), 20 );
         $post_id = $options['post_id'] ?? null;
 
         $input_vector = self::embed( $input, $model );
@@ -17,17 +23,55 @@ class WPCE_ContextQuery {
             return [];
         }
 
-        $rows = WPCE_VectorStore::get_all_embeddings( $model );
+        $rows = self::get_embeddings_bounded( $model, $post_id );
 
         if ( empty( $rows ) ) {
             return [];
         }
 
+        return self::rank( $input_vector, $rows, $top_k );
+    }
+
+    private static function get_embeddings_bounded( string $model, ?int $post_id ): array {
+        global $wpdb;
+
+        $chunks = $wpdb->prefix . 'wpce_chunks';
+        $embeds = $wpdb->prefix . 'wpce_embeddings';
+
         if ( $post_id ) {
-            $rows = array_filter( $rows, fn( $r ) => (int) $r['post_id'] === $post_id );
+            return $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT e.chunk_id, e.vector, e.dimensions, c.post_id, c.content
+                     FROM {$embeds} e
+                     INNER JOIN {$chunks} c ON c.id = e.chunk_id
+                     WHERE e.model = %s AND c.post_id = %d
+                     LIMIT %d",
+                    $model,
+                    $post_id,
+                    self::MAX_CHUNKS
+                ),
+                ARRAY_A
+            ) ?: [];
         }
 
-        $scored = [];
+        return $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT e.chunk_id, e.vector, e.dimensions, c.post_id, c.content
+                 FROM {$embeds} e
+                 INNER JOIN {$chunks} c ON c.id = e.chunk_id
+                 WHERE e.model = %s
+                 ORDER BY e.id DESC
+                 LIMIT %d",
+                $model,
+                self::MAX_CHUNKS
+            ),
+            ARRAY_A
+        ) ?: [];
+    }
+
+    private static function rank( array $input_vector, array $rows, int $top_k ): array {
+        $heap  = new SplMinHeap();
+        $count = 0;
 
         foreach ( $rows as $row ) {
             $vector = json_decode( $row['vector'], true );
@@ -36,17 +80,30 @@ class WPCE_ContextQuery {
                 continue;
             }
 
-            $scored[] = [
-                'post_id'  => (int) $row['post_id'],
-                'chunk_id' => (int) $row['chunk_id'],
-                'content'  => $row['content'],
-                'score'    => self::cosine_similarity( $input_vector, $vector ),
-            ];
+            $score = self::cosine_similarity( $input_vector, $vector );
+
+            if ( $count < $top_k ) {
+                $heap->insert( [ 'score' => $score, 'row' => $row ] );
+                $count++;
+            } elseif ( $score > $heap->top()['score'] ) {
+                $heap->extract();
+                $heap->insert( [ 'score' => $score, 'row' => $row ] );
+            }
         }
 
-        usort( $scored, fn( $a, $b ) => $b['score'] <=> $a['score'] );
+        $results = [];
+        while ( ! $heap->isEmpty() ) {
+            $results[] = $heap->extract();
+        }
 
-        return array_slice( $scored, 0, $top_k );
+        usort( $results, fn( $a, $b ) => $b['score'] <=> $a['score'] );
+
+        return array_map( fn( $item ) => [
+            'post_id'  => (int) $item['row']['post_id'],
+            'chunk_id' => (int) $item['row']['chunk_id'],
+            'content'  => $item['row']['content'],
+            'score'    => $item['score'],
+        ], $results );
     }
 
     public static function embed( string $text, string $model = '' ): array {

@@ -41,6 +41,7 @@ class WPCE_EditorBridge {
                     'required'          => true,
                     'type'              => 'string',
                     'sanitize_callback' => 'sanitize_text_field',
+					'validate_callback' => fn( $v ) => mb_strlen( trim( $v ) ) > 2 && mb_strlen( $v ) <= 500,
                     'validate_callback' => fn( $v ) => strlen( trim( $v ) ) > 2,
                 ],
                 'post_id' => [
