@@ -10,7 +10,7 @@
 
 Do not open a public GitHub issue for security vulnerabilities.
 
-Send a detailed report to: **[buraya kendi e-mail adresini yaz]**
+Send a detailed report to: **batuhanalgul@proton.me**
 
 Include: affected version, description, reproduction steps, potential impact, and suggested fix if any.
 
