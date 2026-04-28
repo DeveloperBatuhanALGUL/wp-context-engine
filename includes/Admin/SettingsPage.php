@@ -4,10 +4,10 @@ defined( 'ABSPATH' ) || exit;
 
 class WPCE_SettingsPage {
 
-    const OPTION_KEY    = 'wpce_settings';
-    const MENU_SLUG     = 'wp-context-engine';
-    const NONCE_ACTION  = 'wpce_save_settings';
-    const NONCE_FIELD   = 'wpce_nonce';
+    const OPTION_KEY   = 'wpce_settings';
+    const MENU_SLUG    = 'wp-context-engine';
+    const NONCE_ACTION = 'wpce_save_settings';
+    const NONCE_FIELD  = 'wpce_nonce';
 
     public static function init(): void {
         add_action( 'admin_menu',    [ __CLASS__, 'register_menu' ] );
@@ -44,13 +44,10 @@ class WPCE_SettingsPage {
             : [];
 
         $settings = [
-            'api_key'       => isset( $_POST['wpce_api_key'] )
-                ? sanitize_text_field( wp_unslash( $_POST['wpce_api_key'] ) )
-                : '',
-            'model'         => isset( $_POST['wpce_model'] )
+            'model'          => isset( $_POST['wpce_model'] )
                 ? sanitize_key( wp_unslash( $_POST['wpce_model'] ) )
                 : 'text-embedding-3-small',
-            'post_types'    => $post_types,
+            'post_types'     => $post_types,
             'visitor_widget' => isset( $_POST['wpce_visitor_widget'] ) ? 1 : 0,
         ];
 
@@ -64,6 +61,10 @@ class WPCE_SettingsPage {
 
         if ( ! $screen || 'settings_page_' . self::MENU_SLUG !== $screen->id ) {
             return;
+        }
+
+        if ( ! defined( 'WPCE_OPENAI_API_KEY' ) || empty( WPCE_OPENAI_API_KEY ) ) {
+            echo '<div class="notice notice-error"><p><strong>WP Context Engine:</strong> API key not found. Add <code>define( \'WPCE_OPENAI_API_KEY\', \'sk-...\' );</code> to your <code>wp-config.php</code>.</p></div>';
         }
 
         if ( ! empty( $_GET['saved'] ) ) {
@@ -103,7 +104,6 @@ class WPCE_SettingsPage {
 
     public static function get(): array {
         return wp_parse_args( get_option( self::OPTION_KEY, [] ), [
-            'api_key'        => '',
             'model'          => 'text-embedding-3-small',
             'post_types'     => [ 'post', 'page' ],
             'visitor_widget' => 0,
@@ -115,34 +115,30 @@ class WPCE_SettingsPage {
             return;
         }
 
-        $settings    = self::get();
-        $all_types   = get_post_types( [ 'public' => true ], 'objects' );
-        $models      = [
+        $settings  = self::get();
+        $all_types = get_post_types( [ 'public' => true ], 'objects' );
+        $models    = [
             'text-embedding-3-small' => 'text-embedding-3-small (recommended)',
             'text-embedding-3-large' => 'text-embedding-3-large (higher accuracy)',
             'text-embedding-ada-002' => 'text-embedding-ada-002 (legacy)',
         ];
+        $key_set = defined( 'WPCE_OPENAI_API_KEY' ) && ! empty( WPCE_OPENAI_API_KEY );
         ?>
         <div class="wrap">
             <h1>WP Context Engine</h1>
+
+            <?php if ( ! $key_set ) : ?>
+            <div class="notice notice-warning inline">
+                <p>Add the following line to your <code>wp-config.php</code> to enable embeddings:</p>
+                <code>define( 'WPCE_OPENAI_API_KEY', 'sk-...' );</code>
+            </div>
+            <?php else : ?>
+            <div class="notice notice-success inline"><p>API key detected.</p></div>
+            <?php endif; ?>
+
             <form method="post">
                 <?php wp_nonce_field( self::NONCE_ACTION, self::NONCE_FIELD ); ?>
-
                 <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="wpce_api_key">OpenAI API Key</label></th>
-                        <td>
-                            <input
-                                type="password"
-                                id="wpce_api_key"
-                                name="wpce_api_key"
-                                value="<?php echo esc_attr( $settings['api_key'] ); ?>"
-                                class="regular-text"
-                                autocomplete="off"
-                            />
-                            <p class="description">Your API key is stored in the database and never exposed in source code.</p>
-                        </td>
-                    </tr>
                     <tr>
                         <th scope="row"><label for="wpce_model">Embedding Model</label></th>
                         <td>
@@ -181,28 +177,22 @@ class WPCE_SettingsPage {
                         </td>
                     </tr>
                 </table>
-
                 <?php submit_button( 'Save Settings' ); ?>
             </form>
 
             <hr />
-
             <h2>Re-index Content</h2>
-            <p>Queue all published posts for re-indexing. This runs in the background and does not affect your visitors.</p>
+            <p>Queue all published posts for re-indexing. Runs in the background.</p>
             <button id="wpce-reindex-btn" class="button button-secondary">Start Re-index</button>
             <span id="wpce-reindex-status" style="margin-left:12px;"></span>
-
             <script>
             document.getElementById('wpce-reindex-btn').addEventListener('click', function() {
-                var btn    = this;
-                var status = document.getElementById('wpce-reindex-status');
+                var btn = this, status = document.getElementById('wpce-reindex-status');
                 btn.disabled = true;
                 status.textContent = 'Queueing...';
-
                 var data = new FormData();
                 data.append('action', 'wpce_reindex');
                 data.append('<?php echo esc_js( self::NONCE_FIELD ); ?>', '<?php echo esc_js( wp_create_nonce( self::NONCE_ACTION ) ); ?>');
-
                 fetch(ajaxurl, { method: 'POST', body: data })
                     .then(function(r) { return r.json(); })
                     .then(function(r) {

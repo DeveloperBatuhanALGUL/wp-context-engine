@@ -4,12 +4,20 @@ defined( 'ABSPATH' ) || exit;
 
 class WPCE_VisitorBridge {
 
-    const RATE_LIMIT_WINDOW   = 60;
-    const RATE_LIMIT_MAX      = 10;
+    const RATE_LIMIT_WINDOW = 60;
+    const RATE_LIMIT_MAX    = 10;
+
+    private const CF_IP_RANGES = [
+        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22',
+        '103.31.4.0/22',   '141.101.64.0/18', '108.162.192.0/18',
+        '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22',
+        '198.41.128.0/17', '162.158.0.0/15',  '104.16.0.0/13',
+        '104.24.0.0/14',   '172.64.0.0/13',   '131.0.72.0/22',
+    ];
 
     public static function init(): void {
-        add_action( 'rest_api_init', [ __CLASS__, 'register_routes' ] );
-        add_action( 'wp_enqueue_scripts', [ __CLASS__, 'enqueue' ] );
+        add_action( 'rest_api_init',       [ __CLASS__, 'register_routes' ] );
+        add_action( 'wp_enqueue_scripts',  [ __CLASS__, 'enqueue' ] );
     }
 
     public static function enqueue(): void {
@@ -54,16 +62,13 @@ class WPCE_VisitorBridge {
             return new WP_REST_Response( [ 'error' => 'rate_limit_exceeded' ], 429 );
         }
 
-        $question = $request->get_param( 'question' );
-
         $nonce = $request->get_header( 'X-WP-Nonce' );
         if ( ! wp_verify_nonce( $nonce, 'wpce_visitor' ) ) {
             return new WP_REST_Response( [ 'error' => 'invalid_nonce' ], 403 );
         }
 
-        $results = WPCE_ContextQuery::query( $question, [
-            'top_k' => 5,
-        ] );
+        $question = $request->get_param( 'question' );
+        $results  = WPCE_ContextQuery::query( $question, [ 'top_k' => 5 ] );
 
         $context = array_map( fn( $r ) => [
             'post_id' => $r['post_id'],
@@ -88,26 +93,44 @@ class WPCE_VisitorBridge {
         }
 
         set_transient( $key, $current + 1, self::RATE_LIMIT_WINDOW );
-
         return true;
     }
 
     private static function get_client_ip(): string {
-        $headers = [
-            'HTTP_CF_CONNECTING_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'REMOTE_ADDR',
-        ];
+        $remote = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
 
-        foreach ( $headers as $header ) {
-            if ( ! empty( $_SERVER[ $header ] ) ) {
-                $ip = trim( explode( ',', sanitize_text_field( wp_unslash( $_SERVER[ $header ] ) ) )[0] );
-                if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) {
-                    return $ip;
-                }
+        if (
+            defined( 'WPCE_TRUST_CLOUDFLARE' ) && WPCE_TRUST_CLOUDFLARE &&
+            ! empty( $_SERVER['HTTP_CF_CONNECTING_IP'] ) &&
+            self::is_cloudflare_ip( $remote )
+        ) {
+            $cf_ip = sanitize_text_field( wp_unslash( $_SERVER['HTTP_CF_CONNECTING_IP'] ) );
+            if ( filter_var( $cf_ip, FILTER_VALIDATE_IP ) ) {
+                return $cf_ip;
             }
         }
 
+        if ( filter_var( $remote, FILTER_VALIDATE_IP ) ) {
+            return $remote;
+        }
+
         return '0.0.0.0';
+    }
+
+    private static function is_cloudflare_ip( string $ip ): bool {
+        foreach ( self::CF_IP_RANGES as $range ) {
+            if ( self::ip_in_cidr( $ip, $range ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function ip_in_cidr( string $ip, string $cidr ): bool {
+        [ $subnet, $bits ] = explode( '/', $cidr );
+        $ip_long     = ip2long( $ip );
+        $subnet_long = ip2long( $subnet );
+        $mask        = ~( ( 1 << ( 32 - (int) $bits ) ) - 1 );
+        return ( $ip_long & $mask ) === ( $subnet_long & $mask );
     }
 }

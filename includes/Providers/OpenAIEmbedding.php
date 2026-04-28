@@ -20,7 +20,9 @@ class WPCE_OpenAIEmbedding {
         }
 
         $settings = WPCE_SettingsPage::get();
-        $api_key  = $settings['api_key'] ?? '';
+        
+
+        $api_key = defined( 'WPCE_OPENAI_API_KEY' ) ? WPCE_OPENAI_API_KEY : '';
 
         if ( empty( $api_key ) ) {
             return [];

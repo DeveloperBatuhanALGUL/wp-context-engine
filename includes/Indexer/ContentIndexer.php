@@ -7,10 +7,11 @@ class WPCE_ContentIndexer {
     const CHUNK_SIZE    = 600;
     const CHUNK_OVERLAP = 50;
     const ASYNC_ACTION  = 'wpce_index_post';
+    const MAX_CHARS     = 50000;
 
     public static function init(): void {
-        add_action( 'save_post',    [ __CLASS__, 'on_save' ], 20, 2 );
-        add_action( 'delete_post',  [ __CLASS__, 'on_delete' ] );
+        add_action( 'save_post',   [ __CLASS__, 'on_save' ], 20, 2 );
+        add_action( 'delete_post', [ __CLASS__, 'on_delete' ] );
         add_action( self::ASYNC_ACTION, [ __CLASS__, 'process' ] );
     }
 
@@ -60,11 +61,23 @@ class WPCE_ContentIndexer {
             wp_strip_all_tags( do_shortcode( $post->post_content ) ),
         ];
 
-        return implode( ' ', array_filter( $parts ) );
+        $text = implode( ' ', array_filter( $parts ) );
+
+        if ( mb_strlen( $text ) > self::MAX_CHARS ) {
+            $text = mb_substr( $text, 0, self::MAX_CHARS );
+        }
+
+        return $text;
     }
 
     private static function chunk( string $text ): array {
-        $words  = preg_split( '/\s+/', trim( $text ), -1, PREG_SPLIT_NO_EMPTY );
+        $text = trim( $text );
+
+        if ( $text === '' ) {
+            return [];
+        }
+
+        $words  = explode( ' ', preg_replace( '/\s+/u', ' ', $text ) );
         $chunks = [];
         $total  = count( $words );
         $step   = self::CHUNK_SIZE - self::CHUNK_OVERLAP;
