@@ -4,8 +4,10 @@ defined( 'ABSPATH' ) || exit;
 
 class WPCE_VisitorBridge {
 
-    const RATE_LIMIT_WINDOW = 60;
-    const RATE_LIMIT_MAX    = 10;
+    const RATE_LIMIT_WINDOW   = 60;
+    const RATE_LIMIT_MAX      = 10;
+    const DAILY_LIMIT_MAX     = 200;
+    const SUSPICIOUS_RATIO    = 0.8;
 
     private const CF_IP_RANGES = [
         '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22',
@@ -16,8 +18,8 @@ class WPCE_VisitorBridge {
     ];
 
     public static function init(): void {
-        add_action( 'rest_api_init',       [ __CLASS__, 'register_routes' ] );
-        add_action( 'wp_enqueue_scripts',  [ __CLASS__, 'enqueue' ] );
+        add_action( 'rest_api_init',      [ __CLASS__, 'register_routes' ] );
+        add_action( 'wp_enqueue_scripts', [ __CLASS__, 'enqueue' ] );
     }
 
     public static function enqueue(): void {
@@ -62,13 +64,22 @@ class WPCE_VisitorBridge {
             return new WP_REST_Response( [ 'error' => 'rate_limit_exceeded' ], 429 );
         }
 
+        if ( ! self::check_daily_limit( $ip ) ) {
+            return new WP_REST_Response( [ 'error' => 'daily_limit_exceeded' ], 429 );
+        }
+
         $nonce = $request->get_header( 'X-WP-Nonce' );
         if ( ! wp_verify_nonce( $nonce, 'wpce_visitor' ) ) {
             return new WP_REST_Response( [ 'error' => 'invalid_nonce' ], 403 );
         }
 
         $question = $request->get_param( 'question' );
-        $results  = WPCE_ContextQuery::query( $question, [ 'top_k' => 5 ] );
+
+        if ( self::is_suspicious( $question ) ) {
+            return new WP_REST_Response( [ 'error' => 'invalid_input' ], 400 );
+        }
+
+        $results = WPCE_ContextQuery::query( $question, [ 'top_k' => 5 ] );
 
         $context = array_map( fn( $r ) => [
             'post_id' => $r['post_id'],
@@ -94,6 +105,40 @@ class WPCE_VisitorBridge {
 
         set_transient( $key, $current + 1, self::RATE_LIMIT_WINDOW );
         return true;
+    }
+
+    private static function check_daily_limit( string $ip ): bool {
+        $key     = 'wpce_dl_' . md5( $ip ) . '_' . gmdate( 'Ymd' );
+        $current = (int) get_transient( $key );
+
+        if ( $current >= self::DAILY_LIMIT_MAX ) {
+            return false;
+        }
+
+        set_transient( $key, $current + 1, DAY_IN_SECONDS );
+        return true;
+    }
+
+    private static function is_suspicious( string $input ): bool {
+        $len = mb_strlen( $input );
+
+        if ( $len < 3 ) {
+            return true;
+        }
+
+        $counts = array_count_values( mb_str_split( $input ) );
+        arsort( $counts );
+        $top_count = reset( $counts );
+
+        if ( $top_count / $len >= self::SUSPICIOUS_RATIO ) {
+            return true;
+        }
+
+        if ( ! preg_match( '/\pL/u', $input ) ) {
+            return true;
+        }
+
+        return false;
     }
 
     private static function get_client_ip(): string {
