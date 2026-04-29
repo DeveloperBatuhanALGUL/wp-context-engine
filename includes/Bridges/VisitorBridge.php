@@ -27,6 +27,13 @@ class WPCE_VisitorBridge {
             return;
         }
 
+        wp_enqueue_style(
+            'wpce-visitor',
+            WPCE_PLUGIN_URL . 'assets/css/visitor.css',
+            [],
+            WPCE_VERSION
+        );
+
         wp_enqueue_script(
             'wpce-visitor',
             WPCE_PLUGIN_URL . 'src/visitor/index.js',
