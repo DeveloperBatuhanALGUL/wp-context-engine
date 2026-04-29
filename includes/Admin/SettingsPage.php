@@ -10,10 +10,23 @@ class WPCE_SettingsPage {
     const NONCE_FIELD  = 'wpce_nonce';
 
     public static function init(): void {
+        add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
         add_action( 'admin_menu',    [ __CLASS__, 'register_menu' ] );
         add_action( 'admin_init',    [ __CLASS__, 'handle_save' ] );
         add_action( 'admin_notices', [ __CLASS__, 'maybe_show_notice' ] );
         add_action( 'wp_ajax_wpce_reindex', [ __CLASS__, 'handle_reindex' ] );
+    }
+
+    public static function enqueue_assets( string $hook ): void {
+        if ( 'settings_page_' . self::MENU_SLUG !== $hook ) {
+            return;
+        }
+        wp_enqueue_style(
+            'wpce-admin',
+            WPCE_PLUGIN_URL . 'assets/css/admin.css',
+            [],
+            WPCE_VERSION
+        );
     }
 
     public static function register_menu(): void {
@@ -118,89 +131,179 @@ class WPCE_SettingsPage {
         $settings  = self::get();
         $all_types = get_post_types( [ 'public' => true ], 'objects' );
         $models    = [
-            'text-embedding-3-small' => 'text-embedding-3-small (recommended)',
-            'text-embedding-3-large' => 'text-embedding-3-large (higher accuracy)',
-            'text-embedding-ada-002' => 'text-embedding-ada-002 (legacy)',
+            'text-embedding-3-small' => 'text-embedding-3-small — Recommended',
+            'text-embedding-3-large' => 'text-embedding-3-large — Higher accuracy',
+            'text-embedding-ada-002' => 'text-embedding-ada-002 — Legacy',
         ];
         $key_set = defined( 'WPCE_OPENAI_API_KEY' ) && ! empty( WPCE_OPENAI_API_KEY );
         ?>
-        <div class="wrap">
-            <h1>WP Context Engine</h1>
+        <div id="wpce-wrap">
+            <div class="wpce-layout">
+                <aside class="wpce-sidebar">
+                    <div class="wpce-sidebar-logo">
+                        <h2>Context Engine</h2>
+                        <span>v<?php echo esc_html( WPCE_VERSION ); ?></span>
+                    </div>
+                    <ul class="wpce-nav">
+                        <li class="active"><a href="#">Overview</a></li>
+                        <li><a href="#">Settings</a></li>
+                        <li><a href="#">Indexing</a></li>
+                        <li><a href="#">Documentation</a></li>
+                    </ul>
+                </aside>
 
-            <?php if ( ! $key_set ) : ?>
-            <div class="notice notice-warning inline">
-                <p>Add the following line to your <code>wp-config.php</code> to enable embeddings:</p>
-                <code>define( 'WPCE_OPENAI_API_KEY', 'sk-...' );</code>
-            </div>
-            <?php else : ?>
-            <div class="notice notice-success inline"><p>API key detected.</p></div>
-            <?php endif; ?>
+                <main class="wpce-main">
+                    <div class="wpce-page-header">
+                        <h1>Overview</h1>
+                        <p>Manage your semantic memory layer, embedding configuration, and indexing pipeline.</p>
+                    </div>
 
-            <form method="post">
-                <?php wp_nonce_field( self::NONCE_ACTION, self::NONCE_FIELD ); ?>
-                <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="wpce_model">Embedding Model</label></th>
-                        <td>
-                            <select id="wpce_model" name="wpce_model">
-                                <?php foreach ( $models as $value => $label ) : ?>
-                                    <option value="<?php echo esc_attr( $value ); ?>" <?php selected( $settings['model'], $value ); ?>>
-                                        <?php echo esc_html( $label ); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Post Types to Index</th>
-                        <td>
-                            <?php foreach ( $all_types as $type ) : ?>
-                                <label style="display:block;margin-bottom:4px;">
-                                    <input
-                                        type="checkbox"
-                                        name="wpce_post_types[]"
-                                        value="<?php echo esc_attr( $type->name ); ?>"
-                                        <?php checked( in_array( $type->name, $settings['post_types'], true ) ); ?>
-                                    />
-                                    <?php echo esc_html( $type->label ); ?>
-                                </label>
-                            <?php endforeach; ?>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Visitor Widget</th>
-                        <td>
-                            <label>
-                                <input type="checkbox" name="wpce_visitor_widget" value="1" <?php checked( $settings['visitor_widget'], 1 ); ?> />
-                                Enable the public-facing context widget
-                            </label>
-                        </td>
-                    </tr>
-                </table>
-                <?php submit_button( 'Save Settings' ); ?>
-            </form>
+                    <?php if ( ! $key_set ) : ?>
+                    <div class="wpce-notice info">
+                        API key not detected. Add <span class="wpce-code">define( 'WPCE_OPENAI_API_KEY', 'sk-...' );</span> to your <span class="wpce-code">wp-config.php</span> to enable embeddings.
+                    </div>
+                    <?php endif; ?>
 
-            <hr />
-            <h2>Re-index Content</h2>
-            <p>Queue all published posts for re-indexing. Runs in the background.</p>
-            <button id="wpce-reindex-btn" class="button button-secondary">Start Re-index</button>
-            <span id="wpce-reindex-status" style="margin-left:12px;"></span>
-            <script>
-            document.getElementById('wpce-reindex-btn').addEventListener('click', function() {
-                var btn = this, status = document.getElementById('wpce-reindex-status');
-                btn.disabled = true;
-                status.textContent = 'Queueing...';
-                var data = new FormData();
-                data.append('action', 'wpce_reindex');
-                data.append('<?php echo esc_js( self::NONCE_FIELD ); ?>', '<?php echo esc_js( wp_create_nonce( self::NONCE_ACTION ) ); ?>');
-                fetch(ajaxurl, { method: 'POST', body: data })
-                    .then(function(r) { return r.json(); })
-                    .then(function(r) {
-                        status.textContent = r.success ? r.data.queued + ' posts queued.' : 'Failed.';
-                        btn.disabled = false;
+                    <?php if ( ! empty( $_GET['saved'] ) ) : ?>
+                    <div class="wpce-notice success">Settings saved successfully.</div>
+                    <?php endif; ?>
+
+                    <div class="wpce-metrics">
+                        <div class="wpce-metric-card">
+                            <div class="label">API Status</div>
+                            <div class="value" style="font-size:16px;margin-top:4px;">
+                                <?php if ( $key_set ) : ?>
+                                <span class="wpce-badge success">Connected</span>
+                                <?php else : ?>
+                                <span class="wpce-badge error">Not configured</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="wpce-metric-card">
+                            <div class="label">Active Model</div>
+                            <div class="value" style="font-size:13px;margin-top:6px;"><?php echo esc_html( $settings['model'] ); ?></div>
+                        </div>
+                        <div class="wpce-metric-card">
+                            <div class="label">Visitor Widget</div>
+                            <div class="value" style="font-size:16px;margin-top:4px;">
+                                <?php if ( ! empty( $settings['visitor_widget'] ) ) : ?>
+                                <span class="wpce-badge success">Enabled</span>
+                                <?php else : ?>
+                                <span class="wpce-badge warning">Disabled</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <form method="post">
+                        <?php wp_nonce_field( self::NONCE_ACTION, self::NONCE_FIELD ); ?>
+
+                        <div class="wpce-section">
+                            <div class="wpce-section-header">
+                                <div>
+                                    <h3>Embedding Model</h3>
+                                    <p>Select the OpenAI model used to generate vector embeddings.</p>
+                                </div>
+                            </div>
+                            <div class="wpce-section-body">
+                                <div class="wpce-field">
+                                    <label for="wpce_model">Model</label>
+                                    <select id="wpce_model" name="wpce_model" class="wpce-select">
+                                        <?php foreach ( $models as $value => $label ) : ?>
+                                            <option value="<?php echo esc_attr( $value ); ?>" <?php selected( $settings['model'], $value ); ?>>
+                                                <?php echo esc_html( $label ); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="wpce-section">
+                            <div class="wpce-section-header">
+                                <div>
+                                    <h3>Content Indexing</h3>
+                                    <p>Choose which post types are included in the semantic index.</p>
+                                </div>
+                            </div>
+                            <div class="wpce-section-body">
+                                <div class="wpce-field">
+                                    <label>Post Types</label>
+                                    <div class="wpce-checkbox-group">
+                                        <?php foreach ( $all_types as $type ) : ?>
+                                            <label class="wpce-checkbox-label">
+                                                <input
+                                                    type="checkbox"
+                                                    name="wpce_post_types[]"
+                                                    value="<?php echo esc_attr( $type->name ); ?>"
+                                                    <?php checked( in_array( $type->name, $settings['post_types'], true ) ); ?>
+                                                />
+                                                <?php echo esc_html( $type->label ); ?>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="wpce-section">
+                            <div class="wpce-section-header">
+                                <div>
+                                    <h3>Visitor Widget</h3>
+                                    <p>Enable the public-facing semantic search widget for site visitors.</p>
+                                </div>
+                            </div>
+                            <div class="wpce-section-body">
+                                <div class="wpce-field">
+                                    <label class="wpce-toggle">
+                                        <input type="checkbox" name="wpce_visitor_widget" value="1" <?php checked( $settings['visitor_widget'], 1 ); ?> />
+                                        <span class="wpce-toggle-track"></span>
+                                        <span class="wpce-toggle-label">Enable visitor widget</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="wpce-actions">
+                            <button type="submit" class="wpce-btn wpce-btn-primary">Save Settings</button>
+                        </div>
+                    </form>
+
+                    <hr class="wpce-divider">
+
+                    <div class="wpce-section">
+                        <div class="wpce-section-header">
+                            <div>
+                                <h3>Re-index Content</h3>
+                                <p>Queue all published posts for re-indexing. Runs in the background without affecting visitors.</p>
+                            </div>
+                        </div>
+                        <div class="wpce-section-body">
+                            <div class="wpce-actions" style="padding-top:0;border-top:none;margin-top:0;">
+                                <button id="wpce-reindex-btn" class="wpce-btn wpce-btn-secondary">Start Re-index</button>
+                                <span id="wpce-reindex-status" class="wpce-status-text"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <script>
+                    document.getElementById('wpce-reindex-btn').addEventListener('click', function() {
+                        var btn = this, status = document.getElementById('wpce-reindex-status');
+                        btn.disabled = true;
+                        status.textContent = 'Queueing...';
+                        var data = new FormData();
+                        data.append('action', 'wpce_reindex');
+                        data.append('<?php echo esc_js( self::NONCE_FIELD ); ?>', '<?php echo esc_js( wp_create_nonce( self::NONCE_ACTION ) ); ?>');
+                        fetch(ajaxurl, { method: 'POST', body: data })
+                            .then(function(r) { return r.json(); })
+                            .then(function(r) {
+                                status.textContent = r.success ? r.data.queued + ' posts queued.' : 'Failed.';
+                                btn.disabled = false;
+                            });
                     });
-            });
-            </script>
+                    </script>
+                </main>
+            </div>
         </div>
         <?php
     }
